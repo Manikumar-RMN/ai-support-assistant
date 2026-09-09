@@ -3,7 +3,7 @@ import { createSupabaseClient } from "@/lib/supabase/client";
 
 export const runtime = "nodejs";
 
-const OPENAI_MODEL = "gpt-5-mini";
+const OPENAI_MODEL = "gpt-5.6-luna";
 
 type KnowledgeRow = {
   content: string;
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
       .map((match, index) => `[Source ${index + 1}] ${match.title}\n${match.content}`)
       .join("\n\n");
 
-    const openAIResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+    const openAIResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -78,29 +78,29 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model: OPENAI_MODEL,
-        temperature: 0.1,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are SupportPilot, a company support knowledge assistant. Answer only from the supplied knowledge context. Do not invent policies, steps, refunds, timelines, or guarantees. If the context does not contain enough information, say so clearly. Give a concise practical answer for a support agent. Never claim an action was taken.",
-          },
-          {
-            role: "user",
-            content: `Question:\n${question}\n\nKnowledge context:\n${context}`,
-          },
-        ],
+        instructions:
+          "You are SupportPilot, a company support knowledge assistant. Answer only from the supplied knowledge context. Do not invent policies, steps, refunds, timelines, or guarantees. If the context does not contain enough information, say so clearly. Give a concise practical answer for a support agent. Never claim an action was taken.",
+        input: `Question:\n${question}\n\nKnowledge context:\n${context}`,
+        max_output_tokens: 400,
       }),
     });
 
     if (!openAIResponse.ok) {
       const details = await openAIResponse.text();
-      console.error("OpenAI API error", details);
-      return NextResponse.json({ error: "The AI service could not generate an answer." }, { status: 502 });
+      console.error("OpenAI API error", openAIResponse.status, details);
+
+      if (openAIResponse.status === 401) {
+        return NextResponse.json({ error: "The OpenAI API key was rejected. Check the Vercel secret and create a new key if needed." }, { status: 502 });
+      }
+      if (openAIResponse.status === 429) {
+        return NextResponse.json({ error: "OpenAI API usage is unavailable for this key right now. Check your API billing, credits, or usage limits." }, { status: 502 });
+      }
+
+      return NextResponse.json({ error: "The AI service could not generate an answer. Check the deployment logs for the API error." }, { status: 502 });
     }
 
     const completion = await openAIResponse.json();
-    const answer = completion.choices?.[0]?.message?.content?.trim();
+    const answer = typeof completion.output_text === "string" ? completion.output_text.trim() : "";
 
     if (!answer) {
       return NextResponse.json({ error: "The AI service returned an empty answer." }, { status: 502 });
