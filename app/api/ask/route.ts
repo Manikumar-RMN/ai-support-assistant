@@ -3,7 +3,7 @@ import { createSupabaseClient } from "@/lib/supabase/client";
 
 export const runtime = "nodejs";
 
-const OPENAI_MODEL = "gpt-5.6-luna";
+const GEMINI_MODEL = "gemini-3.7-flash";
 
 type KnowledgeRow = {
   content: string;
@@ -42,10 +42,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Please enter a question." }, { status: 400 });
     }
 
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: "OpenAI is not configured. Add OPENAI_API_KEY to the Vercel project environment variables." },
+        { error: "Gemini is not configured. Add GEMINI_API_KEY to the Vercel project environment variables." },
         { status: 503 },
       );
     }
@@ -70,40 +70,73 @@ export async function POST(request: Request) {
       .map((match, index) => `[Source ${index + 1}] ${match.title}\n${match.content}`)
       .join("\n\n");
 
-    const openAIResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [
+              {
+                text:
+                  "You are SupportPilot, a company support knowledge assistant. Answer only from the supplied knowledge context. Do not invent policies, steps, refunds, timelines, or guarantees. If the context does not contain enough information, say so clearly. Give a concise practical answer for a support agent. Never claim an action was taken.",
+              },
+            ],
+          },
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: `Question:\n${question}\n\nKnowledge context:\n${context}`,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 400,
+          },
+        }),
       },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        instructions:
-          "You are SupportPilot, a company support knowledge assistant. Answer only from the supplied knowledge context. Do not invent policies, steps, refunds, timelines, or guarantees. If the context does not contain enough information, say so clearly. Give a concise practical answer for a support agent. Never claim an action was taken.",
-        input: `Question:\n${question}\n\nKnowledge context:\n${context}`,
-        max_output_tokens: 400,
-      }),
-    });
+    );
 
-    if (!openAIResponse.ok) {
-      const details = await openAIResponse.text();
-      console.error("OpenAI API error", openAIResponse.status, details);
+    if (!geminiResponse.ok) {
+      const details = await geminiResponse.text();
+      console.error("Gemini API error", geminiResponse.status, details);
 
-      if (openAIResponse.status === 401) {
-        return NextResponse.json({ error: "The OpenAI API key was rejected. Check the Vercel secret and create a new key if needed." }, { status: 502 });
-      }
-      if (openAIResponse.status === 429) {
-        return NextResponse.json({ error: "OpenAI API usage is unavailable for this key right now. Check your API billing, credits, or usage limits." }, { status: 502 });
+      if (geminiResponse.status === 400 || geminiResponse.status === 401 || geminiResponse.status === 403) {
+        return NextResponse.json(
+          { error: "The Gemini API key was rejected. Check the Vercel secret and make sure the Gemini API key is active." },
+          { status: 502 },
+        );
       }
 
-      return NextResponse.json({ error: "The AI service could not generate an answer. Check the deployment logs for the API error." }, { status: 502 });
+      if (geminiResponse.status === 429) {
+        return NextResponse.json(
+          { error: "The Gemini free-tier limit has been reached temporarily. Please wait and try again later." },
+          { status: 502 },
+        );
+      }
+
+      return NextResponse.json(
+        { error: "The Gemini AI service could not generate an answer. Check the deployment logs for the API error." },
+        { status: 502 },
+      );
     }
 
-    const completion = await openAIResponse.json();
-    const answer = typeof completion.output_text === "string" ? completion.output_text.trim() : "";
+    const completion = await geminiResponse.json();
+    const answer = completion.candidates?.[0]?.content?.parts
+      ?.map((part: { text?: string }) => part.text ?? "")
+      .join("")
+      .trim();
 
     if (!answer) {
-      return NextResponse.json({ error: "The AI service returned an empty answer." }, { status: 502 });
+      return NextResponse.json({ error: "The Gemini AI service returned an empty answer." }, { status: 502 });
     }
 
     await supabase.from("conversations").insert({ question, answer });
