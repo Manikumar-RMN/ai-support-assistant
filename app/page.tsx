@@ -1,185 +1,41 @@
 "use client";
-
 import { FormEvent, useEffect, useMemo, useState } from "react";
-
-type Agent = { id: string; name: string; role: string; agent_type: string; status: string };
-type Task = { id: string; title: string; description: string; priority: string; status: string; result: string | null; agent_id: string | null; agents?: { name: string; role: string } | { name: string; role: string }[] | null; created_at: string };
-type Activity = { id: string; event_type: string; message: string; created_at: string; agents?: { name: string } | { name: string }[] | null };
-type Company = { id: string; name: string; description: string | null; goal: string };
-type Ticket = { id: string; subject: string; description: string; category: string | null; priority: string | null; suggested_response: string | null; status: string; customer_name: string | null };
-
-type Workspace = { company: Company | null; agents: Agent[]; tasks: Task[]; activity: Activity[] };
-
-const tabs = ["Overview", "Agents", "Tasks", "Support Agent"];
-const priorities = ["low", "medium", "high", "urgent"];
-
-function agentName(task: Task) {
-  if (Array.isArray(task.agents)) return task.agents[0]?.name ?? "Unassigned";
-  return task.agents?.name ?? "Unassigned";
-}
-
-function formatTime(value: string) {
-  return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-export default function Home() {
-  const [active, setActive] = useState("Overview");
-  const [workspace, setWorkspace] = useState<Workspace>({ company: null, agents: [], tasks: [], activity: [] });
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState("");
-  const [error, setError] = useState("");
-  const [taskTitle, setTaskTitle] = useState("");
-  const [taskDescription, setTaskDescription] = useState("");
-  const [taskAgent, setTaskAgent] = useState("");
-  const [taskPriority, setTaskPriority] = useState("medium");
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<{ content: string; sources: { title: string }[] } | null>(null);
-  const [ticketSubject, setTicketSubject] = useState("");
-  const [ticketDescription, setTicketDescription] = useState("");
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [ticketMessage, setTicketMessage] = useState("");
-
-  async function loadWorkspace() {
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch("/api/workpilot", { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Unable to load workspace.");
-      setWorkspace(data);
-      if (!taskAgent && data.agents?.[0]) setTaskAgent(data.agents[0].id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load workspace.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { loadWorkspace(); }, []);
-
-  async function createTask(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!workspace.company || !taskAgent || !taskTitle.trim() || !taskDescription.trim()) return;
-    setActionLoading("create"); setError("");
-    try {
-      const response = await fetch("/api/workpilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create-task", companyId: workspace.company.id, agentId: taskAgent, title: taskTitle, description: taskDescription, priority: taskPriority }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Unable to create task.");
-      setWorkspace((current) => ({ ...current, tasks: [data.task, ...current.tasks] }));
-      setWorkspace((current) => ({ ...current, activity: [{ id: crypto.randomUUID(), event_type: "task_created", message: `Task created: ${data.task.title}`, created_at: new Date().toISOString() }, ...current.activity] }));
-      setTaskTitle(""); setTaskDescription("");
-      setActive("Tasks");
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to create task."); }
-    finally { setActionLoading(""); }
-  }
-
-  async function runTask(taskId: string) {
-    setActionLoading(taskId); setError("");
-    try {
-      const response = await fetch("/api/run-agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ taskId }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Unable to run agent.");
-      await loadWorkspace();
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to run agent."); setActionLoading(""); }
-  }
-
-  async function approveTask(taskId: string, decision: "approved" | "rejected") {
-    setActionLoading(taskId + decision); setError("");
-    try {
-      const response = await fetch("/api/workpilot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "approval", taskId, decision }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Unable to update approval.");
-      await loadWorkspace();
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to update approval."); }
-    finally { setActionLoading(""); }
-  }
-
-  async function askKnowledge(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!question.trim()) return;
-    setActionLoading("ask"); setError(""); setAnswer(null);
-    try {
-      const response = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Unable to answer.");
-      setAnswer({ content: data.answer, sources: (data.sources ?? []).map((source: { title: string }) => ({ title: source.title })) });
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to answer."); }
-    finally { setActionLoading(""); }
-  }
-
-  async function loadTickets() {
-    try {
-      const response = await fetch("/api/tickets", { cache: "no-store" });
-      const data = await response.json();
-      if (response.ok) setTickets(data.tickets ?? []);
-    } catch { /* Support ticket history is optional for the dashboard. */ }
-  }
-
-  useEffect(() => { if (active === "Support Agent") loadTickets(); }, [active]);
-
-  async function createTicket(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!ticketSubject.trim() || !ticketDescription.trim()) return;
-    setActionLoading("ticket"); setTicketMessage(""); setError("");
-    try {
-      const response = await fetch("/api/tickets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subject: ticketSubject, description: ticketDescription }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Unable to analyze ticket.");
-      setTickets((current) => [data.ticket, ...current]); setTicketSubject(""); setTicketDescription("");
-      setTicketMessage("Support Agent analyzed the ticket and created a human-review draft.");
-    } catch (err) { setError(err instanceof Error ? err.message : "Unable to analyze ticket."); }
-    finally { setActionLoading(""); }
-  }
-
-  const stats = useMemo(() => ({
-    activeAgents: workspace.agents.filter((agent) => agent.status === "working").length,
-    review: workspace.tasks.filter((task) => task.status === "review").length,
-    done: workspace.tasks.filter((task) => task.status === "done").length,
-    open: workspace.tasks.filter((task) => !["done"].includes(task.status)).length,
-  }), [workspace]);
-
-  return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><div className="brand-mark">W</div><div><strong>WorkPilot</strong><span>AI workforce control plane</span></div></div>
-        <div className="company-switcher"><span>COMPANY</span><strong>{workspace.company?.name ?? "Loading..."}</strong><small>AI operations workspace</small></div>
-        <nav>{tabs.map((tab) => <button key={tab} className={active === tab ? "nav-item active" : "nav-item"} onClick={() => setActive(tab)}><span>{tab === "Overview" ? "◈" : tab === "Agents" ? "✦" : tab === "Tasks" ? "☷" : "◉"}</span>{tab}</button>)}</nav>
-        <div className="sidebar-note"><strong>Human-in-the-loop</strong><p>Agents can work on tasks, but outputs stay in review until you approve them.</p></div>
-        <div className="sidebar-footer">v1.0 • Portfolio build</div>
-      </aside>
-
-      <section className="main-area">
-        <header className="main-header"><div><span className="breadcrumb">WORKSPACE / {active.toUpperCase()}</span><h1>{active === "Overview" ? "Company command center" : active}</h1></div><button className="refresh" onClick={loadWorkspace} disabled={loading}>↻ Refresh</button></header>
-
-        {error && <div className="global-error">{error}</div>}
-
-        {active === "Overview" && <>
-          <section className="goal-card"><div><span className="section-kicker">COMPANY GOAL</span><h2>{workspace.company?.goal}</h2><p>{workspace.company?.description}</p></div><div className="goal-badge">AI workforce<br /><strong>ONLINE</strong></div></section>
-          <div className="stat-grid"><div><span>AGENTS WORKING</span><strong>{stats.activeAgents}</strong><small>of {workspace.agents.length} agents</small></div><div><span>OPEN WORK</span><strong>{stats.open}</strong><small>tasks in pipeline</small></div><div><span>NEEDS REVIEW</span><strong>{stats.review}</strong><small>human approval required</small></div><div><span>COMPLETED</span><strong>{stats.done}</strong><small>approved outcomes</small></div></div>
-          <div className="content-grid"><section className="card"><div className="card-heading"><div><span className="section-kicker">WORKFORCE</span><h2>Agent team</h2></div><button className="text-button" onClick={() => setActive("Agents")}>View all →</button></div><div className="agent-mini-list">{workspace.agents.slice(0, 5).map((agent) => <div className="agent-row" key={agent.id}><div className="agent-avatar">{agent.name.slice(0, 1)}</div><div><strong>{agent.name}</strong><span>{agent.role}</span></div><i className={`status-dot ${agent.status}`} /><em>{agent.status}</em></div>)}</div></section><section className="card"><div className="card-heading"><div><span className="section-kicker">ACTIVITY</span><h2>Latest events</h2></div></div><div className="activity-list">{workspace.activity.slice(0, 6).map((item) => <div className="activity-row" key={item.id}><span className="activity-icon">•</span><div><strong>{item.message}</strong><small>{formatTime(item.created_at)}</small></div></div>)}{!workspace.activity.length && <p className="muted">Activity will appear as agents work.</p>}</div></section></div>
-          <section className="card task-card"><div className="card-heading"><div><span className="section-kicker">EXECUTION</span><h2>Work queue</h2></div><button className="text-button" onClick={() => setActive("Tasks")}>Manage tasks →</button></div><TaskTable tasks={workspace.tasks.slice(0, 5)} onRun={runTask} onApprove={approveTask} actionLoading={actionLoading} /></section>
-        </>}
-
-        {active === "Agents" && <section className="card page-card"><div className="card-heading"><div><span className="section-kicker">AI WORKFORCE</span><h2>Your agents</h2><p>Specialized roles give the company goal a practical execution layer.</p></div></div><div className="agent-grid">{workspace.agents.map((agent) => <article className="agent-card" key={agent.id}><div className="agent-card-top"><div className="agent-avatar large">{agent.name.slice(0, 1)}</div><span className={`agent-status ${agent.status}`}>{agent.status}</span></div><h3>{agent.name}</h3><p>{agent.role}</p><span className="agent-type">{agent.agent_type} agent</span><div className="agent-rule" /></article>)}</div></section>}
-
-        {active === "Tasks" && <>
-          <section className="card create-task-card"><div className="card-heading"><div><span className="section-kicker">NEW WORK</span><h2>Assign a task to an agent</h2><p>Tasks are executed by Gemini and returned to you for approval.</p></div></div><form className="task-form" onSubmit={createTask}><div className="task-fields"><input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Task title" required /><select value={taskAgent} onChange={(e) => setTaskAgent(e.target.value)}>{workspace.agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} — {agent.role}</option>)}</select><select value={taskPriority} onChange={(e) => setTaskPriority(e.target.value)}>{priorities.map((priority) => <option key={priority}>{priority}</option>)}</select></div><textarea value={taskDescription} onChange={(e) => setTaskDescription(e.target.value)} placeholder="Describe the outcome you want the agent to produce..." rows={3} required /><button className="primary" disabled={actionLoading === "create"}>{actionLoading === "create" ? "Creating..." : "Create task →"}</button></form></section>
-          <section className="card page-card"><div className="card-heading"><div><span className="section-kicker">TASK MANAGER</span><h2>Execution queue</h2></div><span className="count-pill">{workspace.tasks.length} tasks</span></div><TaskTable tasks={workspace.tasks} onRun={runTask} onApprove={approveTask} actionLoading={actionLoading} /></section>
-        </>}
-
-        {active === "Support Agent" && <>
-          <section className="goal-card support-hero"><div><span className="section-kicker">SPECIALIZED AGENT</span><h2>Support Agent</h2><p>Use the same workforce platform to answer company questions and turn customer issues into structured, reviewable work.</p></div><div className="agent-avatar large">S</div></section>
-          <div className="content-grid support-grid"><section className="card"><div className="card-heading"><div><span className="section-kicker">KNOWLEDGE</span><h2>Ask the company brain</h2></div></div><form className="knowledge-form" onSubmit={askKnowledge}><textarea value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="How do I handle a duplicate payment?" rows={4} /><button className="primary" disabled={actionLoading === "ask"}>{actionLoading === "ask" ? "Thinking..." : "Ask knowledge base →"}</button></form>{answer && <div className="answer-box"><span className="section-kicker">GROUNDED ANSWER</span><p>{answer.content}</p><small>Sources: {answer.sources.map((source) => source.title).join(" • ")}</small></div>}</section><section className="card"><div className="card-heading"><div><span className="section-kicker">TICKET INTELLIGENCE</span><h2>Analyze a customer issue</h2></div></div><form className="knowledge-form" onSubmit={createTicket}><input value={ticketSubject} onChange={(e) => setTicketSubject(e.target.value)} placeholder="Ticket subject" required /><textarea value={ticketDescription} onChange={(e) => setTicketDescription(e.target.value)} placeholder="Customer issue..." rows={4} required /><button className="primary" disabled={actionLoading === "ticket"}>{actionLoading === "ticket" ? "Analyzing..." : "Create & analyze →"}</button></form>{ticketMessage && <p className="success-text">✓ {ticketMessage}</p>}</section></div>
-          <section className="card page-card"><div className="card-heading"><div><span className="section-kicker">RECENT SUPPORT WORK</span><h2>Tickets</h2></div></div><div className="support-list">{tickets.map((ticket) => <article className="support-item" key={ticket.id}><div><span className="ticket-id">#{ticket.id.slice(0, 8)}</span><h3>{ticket.subject}</h3><p>{ticket.description}</p></div><div className="support-side"><span className={`priority priority-${ticket.priority ?? "medium"}`}>{ticket.priority ?? "medium"}</span><strong>{ticket.category ?? "other"}</strong>{ticket.suggested_response && <small>{ticket.suggested_response}</small>}</div></article>)}{!tickets.length && <p className="muted">Create a ticket to see AI classification and a review-ready response here.</p>}</div></section>
-        </>}
-
-        <footer>WorkPilot AI • Paperclip-inspired portfolio project • Gemini free tier • Supabase • Vercel</footer>
-      </section>
-    </main>
-  );
-}
-
-function TaskTable({ tasks, onRun, onApprove, actionLoading }: { tasks: Task[]; onRun: (id: string) => void; onApprove: (id: string, decision: "approved" | "rejected") => void; actionLoading: string }) {
-  if (!tasks.length) return <p className="muted empty">No tasks yet. Create one above.</p>;
-  return <div className="task-table"><div className="task-table-head"><span>WORK</span><span>AGENT</span><span>PRIORITY</span><span>STATUS</span><span>ACTION</span></div>{tasks.map((task) => <article className="task-row" key={task.id}><div><strong>{task.title}</strong><p>{task.description}</p>{task.result && <div className="task-result"><span>AI OUTPUT</span><p>{task.result}</p></div>}</div><span className="agent-name">{agentName(task)}</span><span className={`priority priority-${task.priority}`}>{task.priority}</span><span className={`task-status status-${task.status}`}>{task.status}</span><div className="task-actions">{["todo", "blocked"].includes(task.status) && <button className="run-button" onClick={() => onRun(task.id)} disabled={actionLoading === task.id}>{actionLoading === task.id ? "Running..." : "Run agent"}</button>}{task.status === "review" && <><button className="approve" onClick={() => onApprove(task.id, "approved")} disabled={actionLoading === task.id + "approved"}>Approve</button><button className="reject" onClick={() => onApprove(task.id, "rejected")} disabled={actionLoading === task.id + "rejected"}>Reject</button></>}{task.status === "done" && <span className="done-mark">✓ Approved</span>}</div></article>)}</div>;
-}
+type Agent={id:string;name:string;role:string;agent_type:string;status:string;system_prompt?:string};
+type Task={id:string;title:string;description:string;priority:string;status:string;result:string|null;agent_id:string|null;agents?:{name:string;role:string}|{name:string;role:string}[]|null;created_at:string};
+type Activity={id:string;event_type:string;message:string;created_at:string};
+type Company={id:string;name:string;description:string|null;goal:string};
+type Doc={id:string;title:string;description:string|null;status:string;created_at:string};
+type Workspace={company:Company|null;agents:Agent[];tasks:Task[];activity:Activity[];runs:{estimated_cost:number;input_tokens:number;output_tokens:number;created_at:string}[];heartbeats:{agent_id:string;enabled:boolean;next_run_at:string|null}[];totalCost:number};
+const tabs=["Overview","Agents","Tasks","Knowledge","Operations","Support Agent"];
+const priorities=["low","medium","high","urgent"];
+function agentName(t:Task){return Array.isArray(t.agents)?t.agents[0]?.name??"Unassigned":t.agents?.name??"Unassigned"}
+function time(v:string){return new Date(v).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+function TaskTable({tasks,onRun,onApprove,busy}:{tasks:Task[];onRun:(id:string)=>void;onApprove:(id:string,d:"approved"|"rejected")=>void;busy:string}){return <div className="task-table"><div className="task-table-head"><span>TASK</span><span>AGENT</span><span>PRIORITY</span><span>STATUS</span><span>ACTION</span></div>{tasks.map(t=><div className="task-row" key={t.id}><div><strong>{t.title}</strong><p>{t.description}</p>{t.result&&<div className="task-result"><span>AGENT OUTPUT</span><p>{t.result}</p></div>}</div><span className="agent-name">{agentName(t)}</span><span className={`priority priority-${t.priority}`}>{t.priority}</span><span className={`task-status status-${t.status}`}>{t.status}</span><div className="task-actions">{["todo","blocked"].includes(t.status)&&<button className="run-button" onClick={()=>onRun(t.id)} disabled={busy===t.id}>{busy===t.id?"Running…":"Run agent"}</button>}{t.status==="review"&&<><button className="approve" onClick={()=>onApprove(t.id,"approved")} disabled={busy===t.id+"approved"}>Approve</button><button className="reject" onClick={()=>onApprove(t.id,"rejected")} disabled={busy===t.id+"rejected"}>Reject</button></>}{t.status==="done"&&<span className="done-mark">✓ Approved</span>}</div></div>)}{!tasks.length&&<p className="muted empty">No tasks yet. Create the first piece of work.</p>}</div>}
+export default function Home(){
+ const [active,setActive]=useState("Overview"); const [w,setW]=useState<Workspace>({company:null,agents:[],tasks:[],activity:[],runs:[],heartbeats:[],totalCost:0}); const [docs,setDocs]=useState<Doc[]>([]); const [loading,setLoading]=useState(true); const [busy,setBusy]=useState(""); const [error,setError]=useState("");
+ const [title,setTitle]=useState(""); const [desc,setDesc]=useState(""); const [agent,setAgent]=useState(""); const [priority,setPriority]=useState("medium");
+ const [newAgent,setNewAgent]=useState(""); const [newRole,setNewRole]=useState(""); const [newPrompt,setNewPrompt]=useState(""); const [delegate,setDelegate]=useState(""); const [docTitle,setDocTitle]=useState(""); const [docText,setDocText]=useState(""); const [question,setQuestion]=useState(""); const [answer,setAnswer]=useState<{content:string;sources:string[]}|null>(null); const [ticketSubject,setTicketSubject]=useState(""); const [ticketDescription,setTicketDescription]=useState(""); const [tickets,setTickets]=useState<any[]>([]); const [companyName,setCompanyName]=useState(""); const [goal,setGoal]=useState(""); const [companyDescription,setCompanyDescription]=useState("");
+ async function load(){setLoading(true);setError("");try{const r=await fetch("/api/workpilot",{cache:"no-store"});const d=await r.json();if(!r.ok)throw Error(d.error);setW(d);if(d.company){setCompanyName(d.company.name);setGoal(d.company.goal);setCompanyDescription(d.company.description??"")}if(!agent&&d.agents?.[0])setAgent(d.agents[0].id)}catch(e){setError(e instanceof Error?e.message:"Unable to load workspace")}finally{setLoading(false)}}
+ async function loadDocs(){try{const r=await fetch("/api/knowledge");const d=await r.json();if(r.ok)setDocs(d.documents??[])}catch{}}
+ useEffect(()=>{load();loadDocs()},[]);
+ async function action(body:any){const r=await fetch("/api/workpilot",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error);return d}
+ async function createTask(e:FormEvent){e.preventDefault();if(!w.company||!agent||!title||!desc)return;setBusy("create");try{await action({action:"create-task",companyId:w.company.id,agentId:agent,title,description:desc,priority});setTitle("");setDesc("");await load();setActive("Tasks")}catch(e){setError(e instanceof Error?e.message:"Unable to create task")}finally{setBusy("")}}
+ async function run(id:string){setBusy(id);try{const r=await fetch("/api/run-agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({taskId:id})});const d=await r.json();if(!r.ok)throw Error(d.error);await load()}catch(e){setError(e instanceof Error?e.message:"Agent execution failed")}finally{setBusy("")}}
+ async function approve(id:string,d:"approved"|"rejected"){setBusy(id+d);try{await action({action:"approval",taskId:id,decision:d});await load()}catch(e){setError(e instanceof Error?e.message:"Approval failed")}finally{setBusy("")}}
+ async function saveCompany(e:FormEvent){e.preventDefault();if(!w.company)return;setBusy("company");try{await action({action:"update-company",companyId:w.company.id,name:companyName,goal,description:companyDescription});await load()}catch(e){setError(e instanceof Error?e.message:"Unable to save company")}finally{setBusy("")}}
+ async function addAgent(e:FormEvent){e.preventDefault();if(!w.company)return;setBusy("agent");try{await action({action:"create-agent",companyId:w.company.id,name:newAgent,role:newRole,systemPrompt:newPrompt});setNewAgent("");setNewRole("");setNewPrompt("");await load()}catch(e){setError(e instanceof Error?e.message:"Unable to create agent")}finally{setBusy("")}}
+ async function delegateTask(e:FormEvent){e.preventDefault();if(!w.company||!agent||!delegate)return;setBusy("delegate");try{await action({action:"delegate",companyId:w.company.id,agentId:agent,instruction:delegate});setDelegate("");await load();setActive("Tasks")}catch(e){setError(e instanceof Error?e.message:"Unable to delegate work")}finally{setBusy("")}}
+ async function heartbeat(a:Agent){if(!w.company)return;setBusy(a.id);try{await action({action:"toggle-heartbeat",companyId:w.company.id,agentId:a.id,enabled:!(w.heartbeats.find(h=>h.agent_id===a.id)?.enabled)});await load()}catch(e){setError(e instanceof Error?e.message:"Unable to update heartbeat")}finally{setBusy("")}}
+ async function addKnowledge(e:FormEvent){e.preventDefault();setBusy("doc");try{const r=await fetch("/api/knowledge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:docTitle,text:docText})});const d=await r.json();if(!r.ok)throw Error(d.error);setDocTitle("");setDocText("");await loadDocs()}catch(e){setError(e instanceof Error?e.message:"Unable to add knowledge")}finally{setBusy("")}}
+ async function ask(e:FormEvent){e.preventDefault();setBusy("ask");try{const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question})});const d=await r.json();if(!r.ok)throw Error(d.error);setAnswer({content:d.answer,sources:(d.sources??[]).map((x:any)=>x.title)})}catch(e){setError(e instanceof Error?e.message:"Unable to answer")}finally{setBusy("")}}
+ async function ticket(e:FormEvent){e.preventDefault();setBusy("ticket");try{const r=await fetch("/api/tickets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({subject:ticketSubject,description:ticketDescription})});const d=await r.json();if(!r.ok)throw Error(d.error);setTickets(x=>[d.ticket,...x]);setTicketSubject("");setTicketDescription("")}catch(e){setError(e instanceof Error?e.message:"Unable to analyze ticket")}finally{setBusy("")}}
+ useEffect(()=>{if(active==="Support Agent"){fetch("/api/tickets",{cache:"no-store"}).then(r=>r.json()).then(d=>setTickets(d.tickets??[])).catch(()=>{})}},[active]);
+ const stats=useMemo(()=>({working:w.agents.filter(a=>a.status==="working").length,open:w.tasks.filter(t=>t.status!=="done").length,review:w.tasks.filter(t=>t.status==="review").length,done:w.tasks.filter(t=>t.status==="done").length}),[w]);
+ return <main className="app-shell"><aside className="sidebar"><div className="brand"><div className="brand-mark">W</div><div><strong>WorkPilot</strong><span>AI workforce control plane</span></div></div><div className="company-switcher"><span>COMPANY</span><strong>{w.company?.name??"Loading…"}</strong><small>Cloud AI operations</small></div><nav>{tabs.map(t=><button key={t} className={active===t?"nav-item active":"nav-item"} onClick={()=>setActive(t)}><span>{t==="Overview"?"◈":t==="Agents"?"✦":t==="Tasks"?"☷":t==="Knowledge"?"⌘":t==="Operations"?"◌":"◉"}</span>{t}</button>)}</nav><div className="sidebar-note"><strong>Human-in-the-loop</strong><p>Agents can execute work, but every result stays in review until a human approves it.</p></div><div className="sidebar-footer">v1.1 • Portfolio build</div></aside><section className="main-area"><header className="main-header"><div><span className="breadcrumb">WORKSPACE / {active.toUpperCase()}</span><h1>{active==="Overview"?"Company command center":active}</h1></div><button className="refresh" onClick={load} disabled={loading}>↻ Refresh</button></header>{error&&<div className="global-error">{error}</div>}
+ {active==="Overview"&&<><section className="goal-card"><div><span className="section-kicker">COMPANY GOAL</span><h2>{w.company?.goal}</h2><p>{w.company?.description}</p></div><div className="goal-badge">WORKFORCE<br/><strong>ONLINE</strong></div></section><div className="stat-grid"><div><span>AGENTS WORKING</span><strong>{stats.working}</strong><small>of {w.agents.length} agents</small></div><div><span>OPEN WORK</span><strong>{stats.open}</strong><small>in execution queue</small></div><div><span>NEEDS REVIEW</span><strong>{stats.review}</strong><small>human approval</small></div><div><span>COMPLETED</span><strong>{stats.done}</strong><small>approved outcomes</small></div></div><div className="content-grid"><section className="card"><div className="card-heading"><div><span className="section-kicker">WORKFORCE</span><h2>Agent team</h2></div><button className="text-button" onClick={()=>setActive("Agents")}>Manage →</button></div><div className="agent-mini-list">{w.agents.map(a=><div className="agent-row" key={a.id}><div className="agent-avatar">{a.name[0]}</div><div><strong>{a.name}</strong><span>{a.role}</span></div><i className={`status-dot ${a.status}`}/><em>{a.status}</em></div>)}</div></section><section className="card"><div className="card-heading"><div><span className="section-kicker">ACTIVITY</span><h2>Latest events</h2></div></div><div className="activity-list">{w.activity.slice(0,8).map(a=><div className="activity-row" key={a.id}><span className="activity-icon">•</span><div><strong>{a.message}</strong><small>{time(a.created_at)}</small></div></div>)}{!w.activity.length&&<p className="muted">Activity will appear as the workforce runs.</p>}</div></section></div><section className="card task-card"><div className="card-heading"><div><span className="section-kicker">EXECUTION</span><h2>Work queue</h2></div><button className="text-button" onClick={()=>setActive("Tasks")}>Manage →</button></div><TaskTable tasks={w.tasks.slice(0,5)} onRun={run} onApprove={approve} busy={busy}/></section></>}
+ {active==="Agents"&&<><section className="card page-card"><div className="card-heading"><div><span className="section-kicker">AGENT BUILDER</span><h2>Create a specialist</h2><p>Define the role and operating instructions used during execution.</p></div></div><form className="task-form" onSubmit={addAgent}><div className="task-fields"><input value={newAgent} onChange={e=>setNewAgent(e.target.value)} placeholder="Agent name" required/><input value={newRole} onChange={e=>setNewRole(e.target.value)} placeholder="Role" required/><button className="primary" disabled={busy==="agent"}>{busy==="agent"?"Creating…":"Create agent"}</button></div><textarea value={newPrompt} onChange={e=>setNewPrompt(e.target.value)} placeholder="System instructions, guardrails, tone, responsibilities…" rows={3}/></form></section><section className="card page-card"><div className="card-heading"><div><span className="section-kicker">AI WORKFORCE</span><h2>Agents</h2></div><span className="count-pill">{w.agents.length} agents</span></div><div className="agent-grid">{w.agents.map(a=>{const hb=w.heartbeats.find(h=>h.agent_id===a.id);return <article className="agent-card" key={a.id}><div className="agent-card-top"><div className="agent-avatar large">{a.name[0]}</div><span className={`agent-status ${a.status}`}>{a.status}</span></div><h3>{a.name}</h3><p>{a.role}</p><span className="agent-type">{a.agent_type} agent</span><div className="agent-rule"/><button className="text-button" onClick={()=>heartbeat(a)} disabled={busy===a.id}>{hb?.enabled?"Disable heartbeat":"Enable hourly heartbeat"}</button></article>})}</div></section></>}
+ {active==="Tasks"&&<><section className="card create-task-card"><div className="card-heading"><div><span className="section-kicker">TASK MANAGER</span><h2>Assign work</h2><p>Human-created work or delegated work enters the queue before execution.</p></div></div><form className="task-form" onSubmit={createTask}><div className="task-fields"><input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Task title" required/><select value={agent} onChange={e=>setAgent(e.target.value)}>{w.agents.map(a=><option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select><select value={priority} onChange={e=>setPriority(e.target.value)}>{priorities.map(p=><option key={p}>{p}</option>)}</select></div><textarea value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Describe the outcome you want…" rows={3} required/><button className="primary" disabled={busy==="create"}>{busy==="create"?"Creating…":"Create task →"}</button></form></section><section className="card create-task-card"><div className="card-heading"><div><span className="section-kicker">CEO DELEGATION</span><h2>Delegate work directly</h2><p>Turn a company instruction into an assigned agent task.</p></div></div><form className="task-form" onSubmit={delegateTask}><div className="task-fields"><select value={agent} onChange={e=>setAgent(e.target.value)}>{w.agents.map(a=><option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select><input value={delegate} onChange={e=>setDelegate(e.target.value)} placeholder="What should this agent accomplish?" required/><button className="primary" disabled={busy==="delegate"}>Delegate →</button></div></form></section><section className="card page-card"><div className="card-heading"><div><span className="section-kicker">EXECUTION QUEUE</span><h2>{w.tasks.length} tasks</h2></div></div><TaskTable tasks={w.tasks} onRun={run} onApprove={approve} busy={busy}/></section></>}
+ {active==="Knowledge"&&<><section className="card create-task-card"><div className="card-heading"><div><span className="section-kicker">COMPANY MEMORY</span><h2>Add knowledge</h2><p>Paste an FAQ, SOP, policy or product note. It is chunked and immediately available to agents.</p></div></div><form className="task-form" onSubmit={addKnowledge}><input value={docTitle} onChange={e=>setDocTitle(e.target.value)} placeholder="Document title" required/><textarea value={docText} onChange={e=>setDocText(e.target.value)} placeholder="Paste company knowledge here…" rows={7} required/><button className="primary" disabled={busy==="doc"}>{busy==="doc"?"Indexing…":"Add to knowledge base →"}</button></form></section><section className="card page-card"><div className="card-heading"><div><span className="section-kicker">KNOWLEDGE LIBRARY</span><h2>Connected documents</h2></div></div><div className="support-list">{docs.map(d=><div className="support-item" key={d.id}><div><span className="ticket-id">DOCUMENT</span><h3>{d.title}</h3><p>{d.description??"Company knowledge source"}</p></div><div className="support-side"><span className="task-status status-done">{d.status}</span><small>{time(d.created_at)}</small></div></div>)}{!docs.length&&<p className="muted">No documents yet.</p>}</div></section></>}
+ {active==="Operations"&&<><section className="goal-card"><div><span className="section-kicker">OPERATIONS</span><h2>Execution telemetry & governance</h2><p>Track AI runs, memory, cost, and scheduled heartbeats from one place.</p></div><div className="goal-badge">ESTIMATED COST<br/><strong>$0.00</strong></div></section><div className="stat-grid"><div><span>AI RUNS</span><strong>{w.runs.length}</strong><small>recorded executions</small></div><div><span>INPUT TOKENS</span><strong>{w.runs.reduce((n,r)=>n+Number(r.input_tokens||0),0)}</strong><small>telemetry</small></div><div><span>OUTPUT TOKENS</span><strong>{w.runs.reduce((n,r)=>n+Number(r.output_tokens||0),0)}</strong><small>telemetry</small></div><div><span>EST. COST</span><strong>$0</strong><small>Gemini free tier demo</small></div></div><section className="card page-card"><div className="card-heading"><div><span className="section-kicker">COMPANY SETTINGS</span><h2>Goal & identity</h2></div></div><form className="task-form" onSubmit={saveCompany}><input value={companyName} onChange={e=>setCompanyName(e.target.value)} placeholder="Company name" required/><textarea value={goal} onChange={e=>setGoal(e.target.value)} placeholder="Company goal" rows={3} required/><textarea value={companyDescription} onChange={e=>setCompanyDescription(e.target.value)} placeholder="Description" rows={3}/><button className="primary" disabled={busy==="company"}>Save workspace →</button></form></section><section className="card page-card"><div className="card-heading"><div><span className="section-kicker">HEARTBEATS</span><h2>Scheduled agent readiness</h2><p>Heartbeats store the next scheduled check. Actual execution can be connected to a hosted scheduler later.</p></div></div><div className="agent-mini-list">{w.agents.map(a=>{const hb=w.heartbeats.find(h=>h.agent_id===a.id);return <div className="agent-row" key={a.id}><div className="agent-avatar">{a.name[0]}</div><div><strong>{a.name}</strong><span>{hb?.enabled?`Next check ${hb.next_run_at?time(hb.next_run_at):"hourly"}`:"Heartbeat off"}</span></div><em>{hb?.enabled?"enabled":"off"}</em></div>})}</div></section></>}
+ {active==="Support Agent"&&<><section className="goal-card support-hero"><div><span className="section-kicker">SPECIALIZED AGENT</span><h2>Support Agent</h2><p>Grounded company answers plus structured customer-ticket intelligence, with human review.</p></div><div className="agent-avatar large">S</div></section><div className="content-grid support-grid"><section className="card"><div className="card-heading"><div><span className="section-kicker">KNOWLEDGE</span><h2>Ask the company brain</h2></div></div><form className="knowledge-form" onSubmit={ask}><textarea value={question} onChange={e=>setQuestion(e.target.value)} placeholder="How do I handle a duplicate payment?" rows={4} required/><button className="primary" disabled={busy==="ask"}>{busy==="ask"?"Thinking…":"Ask knowledge base →"}</button></form>{answer&&<div className="answer-box"><span className="section-kicker">GROUNDED ANSWER</span><p>{answer.content}</p><small>Sources: {answer.sources.join(" • ")||"None"}</small></div>}</section><section className="card"><div className="card-heading"><div><span className="section-kicker">TICKET INTELLIGENCE</span><h2>Analyze a customer issue</h2></div></div><form className="knowledge-form" onSubmit={ticket}><input value={ticketSubject} onChange={e=>setTicketSubject(e.target.value)} placeholder="Ticket subject" required/><textarea value={ticketDescription} onChange={e=>setTicketDescription(e.target.value)} placeholder="Customer issue…" rows={4} required/><button className="primary" disabled={busy==="ticket"}>{busy==="ticket"?"Analyzing…":"Analyze ticket →"}</button></form></section></div><section className="card page-card"><div className="card-heading"><div><span className="section-kicker">RECENT TICKETS</span><h2>{tickets.length} analyzed</h2></div></div><div className="support-list">{tickets.slice(0,10).map(t=><div className="support-item" key={t.id}><div><span className="ticket-id">{String(t.id).slice(0,8)}</span><h3>{t.subject}</h3><p>{t.description}</p></div><div className="support-side"><strong>{t.category??"other"} • {t.priority??"medium"}</strong><span className="task-status status-review">{t.status}</span><small>{t.suggested_response??"No draft response"}</small></div></div>)}{!tickets.length&&<p className="muted">Submit a ticket to see AI classification and a suggested response.</p>}</div></section></>}
+ <footer>WorkPilot AI • Built with Next.js, Supabase and Gemini • Demo workspace • Human approval required for agent outputs</footer></section></main>}
