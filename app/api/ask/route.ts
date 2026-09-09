@@ -83,23 +83,19 @@ export async function POST(request: Request) {
             parts: [
               {
                 text:
-                  "You are SupportPilot, a company support knowledge assistant. Answer only from the supplied knowledge context. Do not invent policies, steps, refunds, timelines, or guarantees. If the context does not contain enough information, say so clearly. Give a concise practical answer for a support agent. Never claim an action was taken.",
+                  "You are SupportPilot, a company support knowledge assistant. Answer only from the supplied knowledge context. Do not invent policies, steps, refunds, timelines, or guarantees. If the context does not contain enough information, say so clearly. Give a concise practical answer for a support agent. Use short numbered steps when appropriate. Complete every step and finish the answer; never stop mid-sentence.",
               },
             ],
           },
           contents: [
             {
               role: "user",
-              parts: [
-                {
-                  text: `Question:\n${question}\n\nKnowledge context:\n${context}`,
-                },
-              ],
+              parts: [{ text: `Question:\n${question}\n\nKnowledge context:\n${context}` }],
             },
           ],
           generationConfig: {
             temperature: 0.1,
-            maxOutputTokens: 400,
+            maxOutputTokens: 800,
           },
         }),
       },
@@ -143,10 +139,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       answer,
-      sources: matches.map((match) => ({
-        title: match.title,
-        chunkIndex: match.chunk_index,
-      })),
+      sources: matches.map((match) => ({ title: match.title, chunkIndex: match.chunk_index })),
     });
   } catch (error) {
     console.error(error);
