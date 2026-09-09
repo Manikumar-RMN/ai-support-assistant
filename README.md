@@ -1,73 +1,53 @@
 # WorkPilot AI — AI Workforce Control Plane
 
-WorkPilot is a cloud-first portfolio project inspired by the operating model of modern AI-agent workspaces. It gives a small team a control plane to define a company goal, organize specialized AI agents, assign work, run AI tasks, and keep a human approval step before outcomes are marked complete.
+WorkPilot is a cloud-first portfolio project for operating a small AI workforce. It lets a team define a company goal, create specialized agents, delegate and assign work, execute Gemini-powered tasks, retain agent memory, require human approval, and inspect activity and execution telemetry.
 
-## What it does
-
-- Define a company goal and operating context
-- Organize specialized AI agents: CEO, Support, Product, Developer, Marketing
-- Create and assign tasks to agents
-- Run controlled AI execution using Gemini
-- Move completed agent work into a human review state
-- Approve or reject AI output
-- Keep an activity log of task and agent events
-- Reuse the Support Agent for grounded knowledge answers and ticket intelligence
-
-## Product model
+## Product flow
 
 ```text
-Company Goal
-     ↓
-Agent Workforce
-     ↓
-Task Queue → AI Execution → Human Review
-     ↓                    ↘
-Completed Outcome       Activity Log
+Company Goal → Agents → Delegation / Tasks → Gemini Execution
+                                      ↓
+                               Agent Memory
+                                      ↓
+                               Human Review
+                                  ↙      ↘
+                             Approved   Rejected
+                                  ↓
+                            Activity Log
 ```
 
-The goal is not to clone Paperclip. WorkPilot is a smaller, original implementation that demonstrates the core product idea: **AI agents need an operations layer for goals, work, accountability, and review.**
+## Included
 
-## Current stack
+- Company identity, description and editable goal
+- Agent builder with role and system instructions
+- CEO-style delegation into the task queue
+- Task assignment, priorities and lifecycle: todo → running → review → done/blocked
+- Gemini execution with company goal, agent instructions, knowledge and recent agent memory
+- Human approval / rejection gate
+- Persistent agent memory from completed work
+- Execution telemetry: model, token counts, duration and estimated cost
+- Hourly heartbeat configuration records for agent readiness
+- Knowledge ingestion: paste FAQs, SOPs, policies or product notes; automatic text chunking
+- Grounded knowledge Q&A with source names
+- AI support-ticket classification and suggested responses
+- Activity timeline for governance and traceability
+
+## Stack
 
 - Next.js + React + TypeScript
-- Supabase Postgres for companies, agents, tasks, approvals, activity, and support knowledge
-- Gemini Developer API (`gemini-3.7-flash`) for AI execution
-- Vercel for deployment
-- GitHub for source control
+- Supabase Postgres
+- Gemini Developer API (`gemini-3.7-flash`)
+- Vercel
+- GitHub
 
-## Architecture
+## Cloud-only workflow
 
-```text
-Browser
-  ↓
-Next.js UI
-  ├── /api/workpilot     → workspace, task creation, approvals
-  ├── /api/run-agent     → controlled Gemini task execution
-  ├── /api/ask           → grounded knowledge assistant
-  └── /api/tickets       → support ticket intelligence
-          ↓
-     Supabase Postgres
-          ↓
-   Gemini Developer API
-```
+Everything is designed to run in the cloud. No Docker, local database or local package installation is required for the portfolio workflow.
 
-## Portfolio positioning
+## Important production boundary
 
-This project demonstrates practical AI implementation skills across:
+This is a portfolio/demo control plane, not a production multi-tenant SaaS yet. The demo intentionally uses permissive RLS policies and does not require authentication. Before handling real customer data, add Supabase Auth, tenant/user ownership columns, strict RLS, server-side authorization, rate limiting, file storage with validation, encrypted secrets, background job execution, real scheduler/heartbeat workers, and semantic/vector retrieval.
 
-- AI solution design
-- SaaS workflow modeling
-- LLM integration
-- Knowledge-grounded generation
-- Human-in-the-loop governance
-- AI agent operations
-- Cloud deployment
-- Product-oriented UX
+## Future integrations
 
-## Cost / deployment note
-
-The project is designed around a zero-budget, cloud-only development workflow. It does not require local database or Docker installation. Gemini free-tier limits apply.
-
-## Security note
-
-The current demo uses permissive prototype RLS policies so the public portfolio demo can operate without authentication. It is **not production-ready for private customer data**. A production version should add Supabase Auth, company/user scoping, stricter RLS policies, rate limiting, audit controls, and secret-management hardening.
+The architecture is ready to add Jira, Zendesk, Slack, email and n8n adapters. Those integrations should be introduced only after authentication and tenant isolation are implemented.
